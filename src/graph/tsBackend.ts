@@ -19,6 +19,7 @@ import {
 } from "ts-morph";
 import { relative, resolve, sep } from "node:path";
 import { stat } from "node:fs/promises";
+import { globSync } from "node:fs";
 import type { Graph, GraphNode } from "./analyzer.js";
 
 // Union of the concrete function-like declarations ts-morph exposes. Each
@@ -44,7 +45,15 @@ export async function initTsGraph(repoPath: string, opts: TsBackendOptions = {})
   }
 
   const include = opts.include ?? TS_EXTENSIONS.map((ext) => `**/*${ext}`);
-  const exclude = opts.exclude ?? ["node_modules/**", "dist/**", "build/**", ".git/**"];
+  // Convert exclude globs ("node_modules/**") to dir-name segments for the
+  // fast fs.globSync exclude predicate. ts-morph's addSourceFilesAtPaths does
+  // NOT honor negation globs, so we must filter the file list BEFORE handing
+  // it paths; otherwise it loads every file in node_modules as a full AST and
+  // OOMs on large repos.
+  const excludeDirs = (opts.exclude ?? ["node_modules", "dist", "build", ".git", ".expo", "ios/Pods"])
+    .map((p) => p.replace(/\/.*$/, ""))
+    .filter(Boolean);
+  const excludeRe = new RegExp(`(^|/)(${excludeDirs.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(/|$)`);
 
   const project = new Project({
     tsConfigFilePath: undefined,
@@ -58,16 +67,10 @@ export async function initTsGraph(repoPath: string, opts: TsBackendOptions = {})
     skipAddingFilesFromTsConfig: true,
   });
 
-  // Add files explicitly so we don't need a tsconfig.
-  const added = project.addSourceFilesAtPaths(include.map((p) => joinGlob(absRepo, p)));
-  // Exclude by directory segment: a filepath matches an exclude rule if any
-  // of its path segments equals the exclude dir name. Simpler and more robust
-  // than glob->regex conversion.
-  const excludeDirs = exclude.flatMap((p) => p.split("/")).filter((s) => s && !s.includes("*"));
-  const files = added.filter((f) => {
-    const fp = f.getFilePath();
-    return !excludeDirs.some((d) => fp.includes("/" + d + "/"));
-  });
+  // Glob the file list ourselves (cheap, no ASTs), filter excluded dirs, then
+  // pass explicit absolute paths to ts-morph.
+  const filePaths = globSync(include, { cwd: absRepo, exclude: (p) => excludeRe.test(p) }).map((p) => joinGlob(absRepo, p));
+  const files = project.addSourceFilesAtPaths(filePaths);
   if (files.length === 0) {
     errors.push(`No TypeScript/JavaScript files found in ${absRepo}`);
     return { graph: {}, errors };
@@ -163,12 +166,15 @@ function resolveCallees(
     if (expr.getKind() === SyntaxKind.Identifier) {
       name = expr.getText();
     } else if (expr.getKind() === SyntaxKind.PropertyAccessExpression) {
-      // foo.bar.baz -> use last segment; we resolve via symbol if available
-      const sym = (expr as PropertyAccessExpression).getSymbol();
-      if (sym) {
-        name = sym.getName();
-      } else {
-        name = expr.getText();
+      // foo.bar.baz -> use last segment; we resolve via symbol if available.
+      // getSymbol() triggers the TS type checker, which can throw on some
+      // real-world codebases. Wrap it so one bad expression can't kill the
+      // server; we fall back to the property name text.
+      try {
+        const sym = (expr as PropertyAccessExpression).getSymbol();
+        name = sym ? sym.getName() : (expr as PropertyAccessExpression).getName();
+      } catch {
+        name = (expr as PropertyAccessExpression).getName();
       }
     }
 
@@ -196,9 +202,15 @@ function resolveByName(
   declToKey: Map<FnDecl, string>,
 ): string | null {
   // Prefer TS symbol resolution when the identifier refers to a local/imported
-  // function we tracked.
+  // function we tracked. getSymbol() invokes the type checker and can throw on
+  // some codebases; degrade to the suffix-match fallback below if it does.
   const expr = call.getExpression();
-  const sym: TsSymbol | undefined = expr.getSymbol?.();
+  let sym: TsSymbol | undefined;
+  try {
+    sym = expr.getSymbol?.();
+  } catch {
+    sym = undefined;
+  }
   if (sym) {
     const decls = sym.getDeclarations();
     for (const d of decls) {

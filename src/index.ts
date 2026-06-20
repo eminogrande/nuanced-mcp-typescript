@@ -380,9 +380,9 @@ function formatEnrichmentResult(file_path: string, function_name: string, subgra
   const entrypointKey = Object.keys(subgraph).find((k) => k.endsWith("." + function_name));
   if (!entrypointKey) return `Error: Entry point function ${function_name} not found in subgraph`;
   const node = subgraph[entrypointKey];
-  const directCallees = node.callees.map((c) => c.split(".").pop()!);
+  const directCallees = (node.callees ?? []).map((c) => c.split(".").pop()!);
   const callers = Object.entries(subgraph)
-    .filter(([k, n]) => k !== entrypointKey && n.callees.includes(entrypointKey))
+    .filter(([k, n]) => k !== entrypointKey && (n.callees ?? []).includes(entrypointKey))
     .map(([k]) => k.split(".").pop()!);
 
   const lines = [
@@ -406,13 +406,13 @@ function formatResourceResult(file_path: string, function_name: string, subgraph
   const entrypointKey = Object.keys(subgraph).find((k) => k.endsWith("." + function_name));
   if (!entrypointKey) return `Error: Entry point function ${function_name} not found in subgraph`;
   const node = subgraph[entrypointKey];
-  const calleeDetails = node.callees.map((c) => {
+  const calleeDetails = (node.callees ?? []).map((c) => {
     const cn = subgraph[c];
     const name = c.split(".").pop()!;
     return cn ? `- ${name} (in ${cn.filepath}:${cn.lineno ?? "?"})` : `- ${name} (external)`;
   });
   const callers = Object.entries(subgraph)
-    .filter(([k, n]) => k !== entrypointKey && n.callees.includes(entrypointKey))
+    .filter(([k, n]) => k !== entrypointKey && (n.callees ?? []).includes(entrypointKey))
     .map(([k, n]) => `- ${k.split(".").pop()!} (in ${n.filepath}:${n.lineno ?? "?"})`);
 
   const lines = [

@@ -62,7 +62,7 @@ export function enrich(graph: Graph, filePath: string, functionName: string): En
 }
 
 function stripBuiltins(callees: string[]): string[] {
-  return callees.filter((c) => !c.startsWith(BUILTIN_PREFIX));
+  return (callees ?? []).filter((c) => !c.startsWith(BUILTIN_PREFIX));
 }
 
 // Find all functions whose callees intersect target nodes (i.e. callers of targets).
@@ -70,7 +70,7 @@ export function findDependents(graph: Graph, targetKeys: string[]): Map<string, 
   const targetSet = new Set(targetKeys);
   const dependents = new Map<string, string[]>();
   for (const [key, node] of Object.entries(graph)) {
-    if (node.callees.some((c) => targetSet.has(c))) {
+    if ((node.callees ?? []).some((c) => targetSet.has(c))) {
       const fn = key.split(".").pop()!;
       const list = dependents.get(node.filepath) ?? [];
       if (!list.includes(fn)) list.push(fn);
@@ -84,7 +84,7 @@ export function findDirectCallers(graph: Graph, entryKey: string): Array<{ key: 
   const out: Array<{ key: string; node: GraphNode }> = [];
   for (const [key, node] of Object.entries(graph)) {
     if (key === entryKey) continue;
-    if (node.callees.includes(entryKey)) out.push({ key, node });
+    if ((node.callees ?? []).includes(entryKey)) out.push({ key, node });
   }
   return out;
 }
@@ -104,7 +104,7 @@ export function findIndirectCallers(
     if (depth > maxDepth) continue;
     for (const [k, node] of Object.entries(graph)) {
       if (visited.has(k)) continue;
-      if (node.callees.includes(current)) {
+      if ((node.callees ?? []).includes(current)) {
         visited.add(k);
         queue.push({ key: k, depth: depth + 1 });
         results.push({ key: k, node, depth });
