@@ -14,6 +14,7 @@ import {
   findIndirectCallers,
   type Graph,
 } from "./graph/analyzer.js";
+import { toFlowchart, toSequence } from "./graph/mermaid.js";
 
 const registry = new RepoRegistry();
 const server = new McpServer(
@@ -268,6 +269,46 @@ server.registerTool(
     }
 
     return text(lines.join("\n"));
+  },
+);
+
+server.registerTool(
+  "render_mermaid",
+  {
+    description:
+      "Render a Mermaid diagram (flowchart or sequence) for a function's call graph. Returns Mermaid syntax text that can be pasted into mermaid.live, GitHub markdown, or any Mermaid renderer.",
+    inputSchema: {
+      file_path: z.string().describe("Path to the file containing the function"),
+      function_name: z.string().describe("Name of the function to render"),
+      diagram_type: z
+        .enum(["flowchart", "sequence"])
+        .default("flowchart")
+        .describe("Diagram type: 'flowchart' or 'sequence'"),
+      repo_path: z
+        .string()
+        .optional()
+        .describe("Optional repository path (uses active repository if not specified)"),
+    },
+  },
+  async ({ file_path, function_name, diagram_type, repo_path }) => {
+    const entry = registry.get(repo_path);
+    if (!entry) return text(repo_path ? `Error: Repository '${repo_path}' not initialized` : "Error: No active repository. Please initialize a graph first.");
+    const abs = resolveFilePath(file_path, entry.repoPath);
+    const e = enrich(entry.graph, abs, function_name);
+    if (e.errors.length) return text("Errors rendering diagram:\n" + e.errors.join("\n"));
+    if (!e.result) return text(`Function '${function_name}' not found in '${file_path}'`);
+
+    const subgraph = e.result;
+    const entrypointKey = Object.keys(subgraph).find((k) => k.endsWith("." + function_name));
+    if (!entrypointKey) return text(`Error: Entry point function ${function_name} not found in subgraph`);
+
+    const mermaid = diagram_type === "sequence"
+      ? toSequence(subgraph, entrypointKey)
+      : toFlowchart(subgraph, entrypointKey);
+
+    const header = `# Mermaid ${diagram_type} for '${function_name}' in ${file_path}\n\n`;
+    const footer = `\n\n## Preview\n\nPaste the diagram below into https://mermaid.live to render it visually.\n\n## Stats\n- Nodes: ${Object.keys(subgraph).length}\n- Diagram type: ${diagram_type}`;
+    return text(header + "```mermaid\n" + mermaid + "\n```" + footer);
   },
 );
 
