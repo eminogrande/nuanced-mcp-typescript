@@ -1,115 +1,85 @@
-# Nuanced MCP Server
+# Nuanced MCP Server (TypeScript)
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that provides call graph analysis capabilities to LLMs through the [nuanced](https://github.com/nuanced-dev/nuanced) library.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides call graph analysis to LLMs, ported from [mattmorgis/nuanced-mcp](https://github.com/mattmorgis/nuanced-mcp) (Python) to TypeScript.
 
-## Overview
+This is a fork of the original Python MCP server. The Python implementation is preserved in git history; the working tree is now TypeScript.
 
-This MCP server enables LLMs to understand code structure by accessing function call graphs through standardized tools and resources. It allows AI assistants to:
+## What's different from the original
 
-- Initialize call graphs for Python repos
-- Explore function call relationships
-- Analyze dependencies between functions
-- Provide more contextually aware code assistance
+- **TypeScript, not Python.** Built on the official `@modelcontextprotocol/sdk` over stdio.
+- **Two analysis backends, one server:**
+  - **Python repos:** shells out to the [`nuanced`](https://github.com/nuanced-dev/nuanced) library via `uv run` to produce the call graph, then loads it. No persistent Python process.
+  - **TypeScript/JavaScript repos:** builds the call graph natively with [`ts-morph`](https://ts-morph.dev/), no Python dependency at all.
+- Same 6 tools, 3 resources, and 3 prompts as the original, with an added `language` argument on `initialize_graph`.
 
 ## API
 
 ### Tools
 
-- **initialize_graph**
-
-  - Initialize a code graph for the given repository path
-  - Input: `repo_path` (string)
-
-- **switch_repository**
-
-  - Switch to a different initialized repository
-  - Input: `repo_path` (string)
-
-- **list_repositories**
-
-  - List all initialized repositories
-  - No inputs required
-
-- **get_function_call_graph**
-
-  - Get the call graph for a specific function
-  - Inputs:
-    - `file_path` (string)
-    - `function_name` (string)
-    - `repo_path` (string, optional) - uses active repository if not specified
-
-- **analyze_dependencies**
-
-  - Find all module or file dependencies in the codebase
-  - Inputs (at least one required):
-    - `file_path` (string, optional)
-    - `module_name` (string, optional)
-
-- **analyze_change_impact**
-  - Analyze the impact of changing a specific function
-  - Inputs:
-    - `file_path` (string)
-    - `function_name` (string)
+- **initialize_graph** — Initialize a code graph for a repo.
+  - `repo_path` (string)
+  - `language` (`"python"` | `"typescript"`, default `"python"`)
+- **switch_repository** — Switch to a different initialized repo. `repo_path` (string).
+- **list_repositories** — List all initialized repositories.
+- **get_function_call_graph** — Get the call graph for a specific function.
+  - `file_path` (string), `function_name` (string), `repo_path` (string, optional)
+- **analyze_dependencies** — Find all functions that depend on a file or module.
+  - `file_path` (string, optional), `module_name` (string, optional)
+- **analyze_change_impact** — Analyze the impact of changing a function.
+  - `file_path` (string), `function_name` (string)
 
 ### Resources
 
-- **graph://summary**
-
-  - Get a summary of the currently loaded code graph
-  - No parameters required
-
-- **graph://repo/{repo_path}/summary**
-
-  - Get a summary of a specific repository's code graph
-  - Parameters:
-    - `repo_path` (string) - Path to the repository
-
-- **graph://function/{file_path}/{function_name}**
-  - Get detailed information about a specific function
-  - Parameters:
-    - `file_path` (string) - Path to the file containing the function
-    - `function_name` (string) - Name of the function to analyze
+- `graph://summary` — Summary of the currently loaded graph.
+- `graph://repo/{repo_path}/summary` — Summary of a specific repo.
+- `graph://function/{file_path}/{function_name}` — Details for a specific function.
 
 ### Prompts
 
-- **analyze_function**
+- `analyze_function` — Analyze a function with its call graph.
+- `impact_analysis` — Analyze the impact of changing a function.
+- `analyze_dependencies_prompt` — Analyze dependencies of a file or module.
 
-  - Create a prompt to analyze a function with its call graph
-  - Parameters:
-    - `file_path` (string) - Path to the file containing the function
-    - `function_name` (string) - Name of the function to analyze
+## Requirements
 
-- **impact_analysis**
+- Node.js >= 18
+- `uv` on PATH (only required for analyzing Python repos; the TS backend needs nothing extra)
 
-  - Create a prompt to analyze the impact of changing a function
-  - Parameters:
-    - `file_path` (string) - Path to the file containing the function
-    - `function_name` (string) - Name of the function to analyze
+## Install & run
 
-- **analyze_dependencies_prompt**
-  - Create a prompt to analyze dependencies of a file or module
-  - Parameters (at least one required):
-    - `file_path` (string, optional) - Path to the file to analyze
-    - `module_name` (string, optional) - Name of the module to analyze
+```bash
+npm install
+npm run build
 
-## Usage with Claude Desktop
+# stdio server, for any MCP client (Claude Desktop, etc.)
+node dist/index.js
 
-Add this to your `claude_desktop_config.json`
+# self-check tests
+npm test
+```
 
-### UV
+### Claude Desktop
+
+Add to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "nuanced": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/nuanced-mcp",
-        "run",
-        "nuanced_mcp_server.py"
-      ]
+      "command": "node",
+      "args": ["/absolute/path/to/nuanced-mcp-typescript/dist/index.js"]
     }
   }
 }
 ```
+
+## How it works
+
+The graph data model mirrors the `nuanced` Python format: a flat dict of `dotted.path.fn -> { filepath, callees, lineno, end_lineno }`. The graph-traversal logic (`enrich`, dependency lookup, impact analysis) is written once in pure TypeScript and shared by both backends.
+
+- **Python backend:** one-shot `uv run --with nuanced python3` to dump the graph JSON, then load it. No persistent worker.
+- **TS/JS backend:** `ts-morph` collects function-like declarations, resolves callees via TypeScript symbol resolution with a dotted-key fallback.
+
+## License
+
+MIT, inherited from the upstream repo.
