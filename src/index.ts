@@ -5,7 +5,8 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { resolve, isAbsolute } from "node:path";
+import { resolve, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
 import { RepoRegistry, type Language } from "./graph/registry.js";
 import {
   enrich,
@@ -15,8 +16,18 @@ import {
   type Graph,
 } from "./graph/analyzer.js";
 import { toFlowchart, toSequence } from "./graph/mermaid.js";
+import {
+  KnowledgeGraph,
+  ingestDictatorArchive,
+  ingestPromptDirectory,
+  mergeCodeGraph,
+  searchKnowledge,
+  type KnowledgeNodeType,
+} from "./knowledge/graph.js";
 
 const registry = new RepoRegistry();
+const knowledgeGraphPath = process.env.NUANCED_KNOWLEDGE_GRAPH ?? join(homedir(), ".nuanced", "knowledge-graph.json");
+const dictatorArchivePath = join(homedir(), "Library", "Application Support", "DictateMac", "Dictations");
 const server = new McpServer(
   { name: "Nuanced", version: "0.1.0" },
   {
@@ -309,6 +320,76 @@ server.registerTool(
     const header = `# Mermaid ${diagram_type} for '${function_name}' in ${file_path}\n\n`;
     const footer = `\n\n## Preview\n\nPaste the diagram below into https://mermaid.live to render it visually.\n\n## Stats\n- Nodes: ${Object.keys(subgraph).length}\n- Diagram type: ${diagram_type}`;
     return text(header + "```mermaid\n" + mermaid + "\n```" + footer);
+  },
+);
+
+server.registerTool(
+  "knowledge_ingest",
+  {
+    description: "Build or refresh one searchable graph from initialized code repositories, DICTATOR recordings/transcripts, and prompt/document directories.",
+    inputSchema: {
+      dictator_archive: z.string().optional().describe("DICTATOR archive path; defaults to the local standard path"),
+      prompt_paths: z.array(z.string()).optional().describe("Directories containing prompts, notes, JSON, JSONL, Markdown, or text"),
+      include_initialized_repositories: z.boolean().default(true),
+      reset: z.boolean().default(false).describe("Start a fresh graph instead of merging into the saved graph"),
+    },
+  },
+  async ({ dictator_archive, prompt_paths, include_initialized_repositories, reset }) => {
+    const graph = reset ? new KnowledgeGraph() : await KnowledgeGraph.load(knowledgeGraphPath);
+    const recordings = await ingestDictatorArchive(graph, dictator_archive ?? dictatorArchivePath);
+    let prompts = 0;
+    for (const path of prompt_paths ?? []) prompts += await ingestPromptDirectory(graph, resolve(path));
+    let repositories = 0;
+    if (include_initialized_repositories) {
+      for (const entry of registry.list().entries) {
+        mergeCodeGraph(graph, entry.repoPath, entry.graph);
+        repositories += 1;
+      }
+    }
+    graph.connectRelated();
+    await graph.save(knowledgeGraphPath);
+    return text(JSON.stringify({ path: knowledgeGraphPath, recordings, prompts, repositories, nodes: graph.nodes.size, edges: graph.edges.length }, null, 2));
+  },
+);
+
+server.registerTool(
+  "knowledge_search",
+  {
+    description: "Search code, recordings, transcripts, and prompts together and return connected graph context.",
+    inputSchema: {
+      query: z.string().min(1),
+      limit: z.number().int().min(1).max(100).default(20),
+      types: z.array(z.enum(["project", "file", "function", "recording", "transcript", "prompt", "keyword"])).optional(),
+    },
+  },
+  async ({ query, limit, types }) => {
+    const graph = await KnowledgeGraph.load(knowledgeGraphPath);
+    await ingestDictatorArchive(graph, dictatorArchivePath);
+    graph.connectRelated();
+    await graph.save(knowledgeGraphPath);
+    const results = searchKnowledge(graph, query, limit, types as KnowledgeNodeType[] | undefined).map((result) => ({
+      id: result.node.id, type: result.node.type, label: result.node.label, path: result.node.path,
+      score: result.score, excerpt: result.node.text.slice(0, 500),
+      related: result.related.map((node) => ({ id: node.id, type: node.type, label: node.label, path: node.path })),
+    }));
+    return text(JSON.stringify({ query, results }, null, 2));
+  },
+);
+
+server.registerTool(
+  "knowledge_stats",
+  { description: "Show saved unified knowledge graph counts and storage path.", inputSchema: {} },
+  async () => {
+    const graph = await KnowledgeGraph.load(knowledgeGraphPath);
+    const nodes = [...graph.nodes.values()].reduce<Record<string, number>>((counts, node) => {
+      counts[node.type] = (counts[node.type] ?? 0) + 1;
+      return counts;
+    }, {});
+    const edges = graph.edges.reduce<Record<string, number>>((counts, edge) => {
+      counts[edge.type] = (counts[edge.type] ?? 0) + 1;
+      return counts;
+    }, {});
+    return text(JSON.stringify({ path: knowledgeGraphPath, nodes, edges }, null, 2));
   },
 );
 

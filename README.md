@@ -83,3 +83,25 @@ The graph data model mirrors the `nuanced` Python format: a flat dict of `dotted
 ## License
 
 MIT, inherited from the upstream repo.
+
+
+## Unified Knowledge Brain
+
+The server extends the code call graph with a persistent heterogeneous graph for DICTATOR recordings/transcripts, prompts/documents, repositories, source files, functions, and keywords.
+
+MCP tools:
+
+- `knowledge_ingest` — refresh initialized repositories, DICTATOR history, and document directories.
+- `knowledge_search` — token-bounded source-backed search with related graph nodes.
+- `knowledge_stats` — node/edge counts by type.
+
+Direct app/CLI commands:
+
+```bash
+npm run build
+node dist/brain-cli.js import-repo https://github.com/owner/repository
+node dist/brain-cli.js search "minimum font size 16"
+node dist/brain-cli.js stats
+```
+
+The default graph is `~/Library/Application Support/DictateMac/Brain/knowledge-graph.json`. Archive refresh replaces stale recording/transcript nodes while preserving repository knowledge.
