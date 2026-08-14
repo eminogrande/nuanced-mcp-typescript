@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "name": "Nuanced public benchmark fixture",
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "cases": [
+    {
+      "id": "fact-wallet-recovery",
+      "question": "How does wallet recovery work?",
+      "expectedFacts": ["backup key"],
+      "goldSourceIDs": ["memory:wallet"],
+      "goldSourcePaths": [],
+      "expectedNodeTypes": ["memory"],
+      "forbiddenClaims": ["recovery is impossible"],
+      "tags": ["type:fact", "language:en"],
+      "minimumGoldSources": 1
+    },
+    {
+      "id": "cross-language-font-size",
+      "question": "Was ist die kleinste Schriftgröße?",
+      "expectedFacts": ["16 pixels"],
+      "goldSourceIDs": ["file:design"],
+      "goldSourcePaths": [],
+      "expectedNodeTypes": ["file"],
+      "forbiddenClaims": ["12 pixels"],
+      "tags": ["type:cross-language", "language:de"],
+      "minimumGoldSources": 1
+    },
+    {
+      "id": "decision-waveform-layout",
+      "question": "Where must the waveform appear relative to the transcript?",
+      "expectedFacts": ["above the transcript"],
+      "goldSourceIDs": ["turn:waveform"],
+      "goldSourcePaths": [],
+      "expectedNodeTypes": ["turn"],
+      "forbiddenClaims": ["behind the transcript"],
+      "tags": ["type:decision", "language:en"],
+      "minimumGoldSources": 1
+    },
+    {
+      "id": "latest-state-provider",
+      "question": "Which memory provider is currently active?",
+      "expectedFacts": ["Nuanced Brain"],
+      "goldSourceIDs": ["document:architecture"],
+      "goldSourcePaths": [],
+      "expectedNodeTypes": ["document"],
+      "forbiddenClaims": ["a second vector database"],
+      "tags": ["type:latest-state", "language:en"],
+      "minimumGoldSources": 1
+    },
+    {
+      "id": "abstain-unknown",
+      "question": "What launch date was approved for Project Aurora?",
+      "expectedFacts": [],
+      "goldSourceIDs": ["document:no-aurora-answer"],
+      "goldSourcePaths": [],
+      "expectedNodeTypes": ["document"],
+      "forbiddenClaims": ["January 1 2030"],
+      "tags": ["type:abstention", "language:en"],
+      "minimumGoldSources": 1
+    }
+  ]
+}

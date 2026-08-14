@@ -25,12 +25,13 @@ import {
   ingestKnowledgePath,
   ingestPromptDirectory,
   mergeCodeGraph,
-  searchKnowledge,
   type KnowledgeNodeType,
 } from "./knowledge/graph.js";
+import { hybridSearchKnowledge, loadEmbeddingIndex, OllamaEmbedder } from "./knowledge/embeddings.js";
 
 const registry = new RepoRegistry();
 const knowledgeGraphPath = process.env.NUANCED_KNOWLEDGE_GRAPH ?? join(homedir(), ".nuanced", "knowledge-graph.json");
+const embeddingIndexPath = process.env.NUANCED_EMBEDDING_INDEX ?? join(dirname(knowledgeGraphPath), "semantic-index.json");
 const dictatorArchivePath = join(homedir(), "Library", "Application Support", "DictateMac", "Dictations");
 const server = new McpServer(
   { name: "Nuanced", version: "0.1.0" },
@@ -379,7 +380,7 @@ server.registerTool(
     inputSchema: {
       query: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(20),
-      types: z.array(z.enum(["project", "file", "function", "recording", "transcript", "prompt", "document", "memory", "session", "turn", "keyword"])).optional(),
+      types: z.array(z.enum(["project", "file", "function", "recording", "transcript", "prompt", "document", "memory", "session", "turn", "entity", "claim", "decision", "preference", "task", "event", "keyword"])).optional(),
     },
   },
   async ({ query, limit, types }) => {
@@ -387,7 +388,14 @@ server.registerTool(
     await ingestDictatorArchive(graph, dictatorArchivePath);
     graph.connectRelated();
     await graph.save(knowledgeGraphPath);
-    const results = searchKnowledge(graph, query, limit, types as KnowledgeNodeType[] | undefined).map((result) => ({
+    const results = (await hybridSearchKnowledge(
+      graph,
+      query,
+      limit,
+      await loadEmbeddingIndex(embeddingIndexPath),
+      new OllamaEmbedder(),
+      types as KnowledgeNodeType[] | undefined,
+    )).map((result) => ({
       id: result.node.id, type: result.node.type, label: result.node.label, path: result.node.path,
       score: result.score, excerpt: excerptFor(result.node.text, query, 500),
       related: result.related.map((node) => ({ id: node.id, type: node.type, label: node.label, path: node.path })),

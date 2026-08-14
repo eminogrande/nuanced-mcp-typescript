@@ -11,6 +11,7 @@ import {
   ingestPromptDirectory,
   ingestRepositoryFiles,
   mergeCodeGraph,
+  removeRepositoryKnowledge,
   searchKnowledge,
 } from "../knowledge/graph.js";
 import type { Graph } from "../graph/analyzer.js";
@@ -52,7 +53,7 @@ test("unified graph connects code, recording, transcript, prompt, and keyword no
   assert.ok(results.some((r) => r.node.type === "function"));
   assert.ok(graph.edges.some((e) => e.type === "HAS_TRANSCRIPT"));
   assert.ok(graph.edges.some((e) => e.type === "TAGGED"));
-  assert.ok(graph.edges.some((e) => e.type === "RELATED"));
+  assert.equal(graph.edges.some((e) => e.type === "RELATED"), false);
 
   await rm(join(archive, "000001_2026-08-13_20-00_wallet-recovery.json"));
   await ingestDictatorArchive(graph, archive);
@@ -79,6 +80,22 @@ test("generic repository ingestion makes Swift preferences searchable", async ()
   assert.equal(files, 1);
   assert.ok(results.some((result) => result.node.type === "file" && result.node.label === "DesignSystem.swift"));
   assert.ok(searchKnowledge(graph, "16", 10).some((result) => result.node.label === "DesignSystem.swift"));
+});
+
+test("repository replacement removes deleted files, functions, and derived claims", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nuanced-repo-refresh-"));
+  const path = join(root, "Deleted.swift");
+  await writeFile(path, "func removed() {}\n");
+  const graph = new KnowledgeGraph();
+  await ingestRepositoryFiles(graph, root, "https://github.com/example/repo");
+  const file = [...graph.nodes.values()].find((node) => node.type === "file")!;
+  graph.upsertNode({ id: "function:removed", type: "function", label: "removed", text: "removed", path, metadata: { project: root } });
+  graph.upsertNode({ id: "claim:removed", type: "claim", label: "Removed claim", text: "Removed claim", path, metadata: { sourceID: file.id, sourcePath: path } });
+
+  const removed = removeRepositoryKnowledge(graph, root);
+
+  assert.equal(removed, 4);
+  assert.equal([...graph.nodes.values()].some((node) => node.path === root || node.metadata.project === root || node.metadata.sourceID === file.id), false);
 });
 
 test("function graph merging preserves repository source contents", async () => {
@@ -162,6 +179,12 @@ test("ingests pasted text as a provenance-preserving document", async () => {
   assert.equal(node?.label, "DICTATOR feedback");
   assert.equal(node?.path, path);
   assert.equal(node?.metadata.kind, "paste");
+});
+
+test("search matches simple singular and plural terms", () => {
+  const graph = new KnowledgeGraph();
+  graph.upsertNode({ id: "memory:projects", type: "memory", label: "Projects", text: "Projects require a fresh-clone check.", path: null, metadata: {} });
+  assert.equal(searchKnowledge(graph, "project verification", 5)[0]?.node.id, "memory:projects");
 });
 
 test("phonetic retrieval connects Whisper PASCII to passkey evidence", () => {
