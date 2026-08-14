@@ -6,7 +6,10 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
   KnowledgeGraph,
+  browseKnowledge,
+  excerptFor,
   ingestDictatorArchive,
+  ingestKnowledgePath,
   ingestPromptDirectory,
   ingestRepositoryFiles,
   mergeCodeGraph,
@@ -30,16 +33,30 @@ if (command === "ingest") {
 } else if (command === "search") {
   const graph = await loadFresh();
   await save(graph);
-  const results = searchKnowledge(graph, args.join(" "), 24).map(({ node, score, related }) => ({
+  const query = args.join(" ");
+  const results = searchKnowledge(graph, query, 24).map(({ node, score, related }) => ({
     id: node.id, type: node.type, label: node.label, path: node.path, score,
-    excerpt: node.text.slice(0, 700),
+    excerpt: excerptFor(node.text, query, 700),
     related: related.map((item) => ({ id: item.id, type: item.type, label: item.label, path: item.path })),
   }));
-  console.log(JSON.stringify({ query: args.join(" "), results }));
+  console.log(JSON.stringify({ query, results }));
 } else if (command === "stats") {
   const graph = await loadFresh();
   await save(graph);
   output(graph, {});
+} else if (command === "browse") {
+  const graph = await loadFresh();
+  await save(graph);
+  const rawType = args[0] ?? "all";
+  const allowed = new Set(["project", "file", "function", "recording", "transcript", "prompt", "document", "memory", "session", "turn"]);
+  if (rawType !== "all" && !allowed.has(rawType)) throw new Error(`Unknown source type: ${rawType}`);
+  const limit = Number.parseInt(args[1] ?? "50", 10);
+  const results = browseKnowledge(graph, rawType === "all" ? undefined : rawType as Parameters<typeof browseKnowledge>[1], limit).map(({ node, score, related }) => ({
+    id: node.id, type: node.type, label: node.label, path: node.path, score,
+    excerpt: node.text.slice(0, 700),
+    related: related.map((item) => ({ id: item.id, type: item.type, label: item.label, path: item.path })),
+  }));
+  console.log(JSON.stringify({ query: "", results }));
 } else if (command === "visualize") {
   const graph = await loadFresh();
   const hits = searchKnowledge(graph, args.join(" "), 18);
@@ -54,7 +71,7 @@ if (command === "ingest") {
   await mkdir(repositoriesPath, { recursive: true });
   const repo = await checkout(source);
   const graph = await loadFresh();
-  const files = await ingestRepositoryFiles(graph, repo);
+  const files = await ingestRepositoryFiles(graph, repo, existsSync(source) ? undefined : source);
   let functions = 0;
   const language = detectLanguage(repo);
   if (language === "typescript") {
@@ -68,8 +85,17 @@ if (command === "ingest") {
   }
   await save(graph);
   output(graph, { repository: repo, language, files, functions });
+} else if (command === "ingest-file") {
+  const source = args[0];
+  if (!source) throw new Error("File or directory path required");
+  const kind = args[1];
+  const label = args.slice(2).join(" ") || undefined;
+  const graph = await loadFresh();
+  const imported = await ingestKnowledgePath(graph, source, { kind, label });
+  await save(graph);
+  output(graph, { source: resolve(source), imported });
 } else {
-  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | search <query> | stats | visualize <query> | import-repo <github-url>");
+  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url>");
 }
 
 async function loadFresh(): Promise<KnowledgeGraph> {

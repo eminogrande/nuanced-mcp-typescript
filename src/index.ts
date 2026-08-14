@@ -5,7 +5,9 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { resolve, isAbsolute, join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve, isAbsolute, join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { RepoRegistry, type Language } from "./graph/registry.js";
 import {
@@ -18,7 +20,9 @@ import {
 import { toFlowchart, toSequence } from "./graph/mermaid.js";
 import {
   KnowledgeGraph,
+  excerptFor,
   ingestDictatorArchive,
+  ingestKnowledgePath,
   ingestPromptDirectory,
   mergeCodeGraph,
   searchKnowledge,
@@ -326,19 +330,35 @@ server.registerTool(
 server.registerTool(
   "knowledge_ingest",
   {
-    description: "Build or refresh one searchable graph from initialized code repositories, DICTATOR recordings/transcripts, and prompt/document directories.",
+    description: "Build or refresh one searchable graph from code repositories, DICTATOR recordings, Hermes memory files, agent session exports, documents, and pasted text.",
     inputSchema: {
       dictator_archive: z.string().optional().describe("DICTATOR archive path; defaults to the local standard path"),
       prompt_paths: z.array(z.string()).optional().describe("Directories containing prompts, notes, JSON, JSONL, Markdown, or text"),
+      source_paths: z.array(z.string()).optional().describe("Files or directories to import; supports Hermes MEMORY.md/USER.md, Hermes session JSONL, generic agent exports, Markdown, JSON, JSONL, and text"),
+      texts: z.array(z.object({
+        label: z.string().min(1),
+        text: z.string().min(1),
+        kind: z.string().default("agent-context"),
+      })).optional().describe("Pasted context to preserve as source files and ingest with provenance"),
       include_initialized_repositories: z.boolean().default(true),
       reset: z.boolean().default(false).describe("Start a fresh graph instead of merging into the saved graph"),
     },
   },
-  async ({ dictator_archive, prompt_paths, include_initialized_repositories, reset }) => {
+  async ({ dictator_archive, prompt_paths, source_paths, texts, include_initialized_repositories, reset }) => {
     const graph = reset ? new KnowledgeGraph() : await KnowledgeGraph.load(knowledgeGraphPath);
     const recordings = await ingestDictatorArchive(graph, dictator_archive ?? dictatorArchivePath);
     let prompts = 0;
     for (const path of prompt_paths ?? []) prompts += await ingestPromptDirectory(graph, resolve(path));
+    const imported = { documents: 0, memories: 0, sessions: 0, turns: 0 };
+    for (const path of source_paths ?? []) mergeImportSummary(imported, await ingestKnowledgePath(graph, resolve(path)));
+    for (const item of texts ?? []) {
+      const importsDirectory = join(dirname(knowledgeGraphPath), "Imports");
+      await mkdir(importsDirectory, { recursive: true });
+      const digest = createHash("sha256").update(`${item.label}\n${item.text}`).digest("hex").slice(0, 20);
+      const path = join(importsDirectory, `${digest}.txt`);
+      await writeFile(path, item.text, { encoding: "utf8", mode: 0o600 });
+      mergeImportSummary(imported, await ingestKnowledgePath(graph, path, { kind: item.kind, label: item.label }));
+    }
     let repositories = 0;
     if (include_initialized_repositories) {
       for (const entry of registry.list().entries) {
@@ -348,7 +368,7 @@ server.registerTool(
     }
     graph.connectRelated();
     await graph.save(knowledgeGraphPath);
-    return text(JSON.stringify({ path: knowledgeGraphPath, recordings, prompts, repositories, nodes: graph.nodes.size, edges: graph.edges.length }, null, 2));
+    return text(JSON.stringify({ path: knowledgeGraphPath, recordings, prompts, imported, repositories, nodes: graph.nodes.size, edges: graph.edges.length }, null, 2));
   },
 );
 
@@ -359,7 +379,7 @@ server.registerTool(
     inputSchema: {
       query: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(20),
-      types: z.array(z.enum(["project", "file", "function", "recording", "transcript", "prompt", "keyword"])).optional(),
+      types: z.array(z.enum(["project", "file", "function", "recording", "transcript", "prompt", "document", "memory", "session", "turn", "keyword"])).optional(),
     },
   },
   async ({ query, limit, types }) => {
@@ -369,7 +389,7 @@ server.registerTool(
     await graph.save(knowledgeGraphPath);
     const results = searchKnowledge(graph, query, limit, types as KnowledgeNodeType[] | undefined).map((result) => ({
       id: result.node.id, type: result.node.type, label: result.node.label, path: result.node.path,
-      score: result.score, excerpt: result.node.text.slice(0, 500),
+      score: result.score, excerpt: excerptFor(result.node.text, query, 500),
       related: result.related.map((node) => ({ id: node.id, type: node.type, label: node.label, path: node.path })),
     }));
     return text(JSON.stringify({ query, results }, null, 2));
@@ -617,6 +637,16 @@ Please provide a thorough analysis to help me make informed decisions about modi
 }
 
 // MCP result-shape helpers
+function mergeImportSummary(
+  target: { documents: number; memories: number; sessions: number; turns: number },
+  source: { documents: number; memories: number; sessions: number; turns: number },
+) {
+  target.documents += source.documents;
+  target.memories += source.memories;
+  target.sessions += source.sessions;
+  target.turns += source.turns;
+}
+
 function text(content: string) {
   return { content: [{ type: "text" as const, text: content }] };
 }

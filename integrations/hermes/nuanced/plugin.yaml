@@ -1,0 +1,3 @@
+name: nuanced
+version: 0.1.0
+description: "Local cross-agent memory backed by Nuanced Brain with Hermes lifecycle compatibility."
