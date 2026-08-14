@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   KnowledgeGraph,
   browseKnowledge,
@@ -17,12 +17,18 @@ import {
 } from "./knowledge/graph.js";
 import { initPythonGraph } from "./graph/pythonBackend.js";
 import { initTsGraph } from "./graph/tsBackend.js";
-import { loadBenchmarkSuite, runBenchmark, writeBenchmarkReport } from "./benchmark.js";
+import { loadBenchmarkSuite, runBenchmark, runBenchmarkWithSearch, writeBenchmarkReport } from "./benchmark.js";
+import { buildEmbeddingIndex, hybridSearchKnowledge, loadEmbeddingIndex, OllamaEmbedder } from "./knowledge/embeddings.js";
+import { OllamaSemanticExtractor, refreshSemanticKnowledge } from "./knowledge/semantic.js";
+import { loadManagedRepositoryState, refreshManagedRepositories } from "./knowledge/managedRepositories.js";
 
 const support = join(homedir(), "Library", "Application Support", "DictateMac");
 const graphPath = process.env.NUANCED_KNOWLEDGE_GRAPH ?? join(support, "Brain", "knowledge-graph.json");
 const archivePath = process.env.DICTATOR_ARCHIVE ?? join(support, "Dictations");
-const repositoriesPath = join(support, "Brain", "Repositories");
+const brainDirectory = dirname(graphPath);
+const repositoriesPath = process.env.NUANCED_REPOSITORIES_ROOT ?? join(brainDirectory, "Repositories");
+const managedRepositoriesStatePath = process.env.NUANCED_REPOSITORY_STATE ?? join(brainDirectory, "managed-repositories.json");
+const embeddingsPath = process.env.NUANCED_EMBEDDING_INDEX ?? join(dirname(graphPath), "semantic-index.json");
 const [command = "ingest", ...args] = process.argv.slice(2);
 
 if (command === "ingest") {
@@ -35,7 +41,13 @@ if (command === "ingest") {
   const graph = await loadFresh();
   await save(graph);
   const query = args.join(" ");
-  const results = searchKnowledge(graph, query, 24).map(({ node, score, related }) => ({
+  const results = (await hybridSearchKnowledge(
+    graph,
+    query,
+    24,
+    await loadEmbeddingIndex(embeddingsPath),
+    new OllamaEmbedder(),
+  )).map(({ node, score, related }) => ({
     id: node.id, type: node.type, label: node.label, path: node.path, score,
     excerpt: excerptFor(node.text, query, 700),
     related: related.map((item) => ({ id: item.id, type: item.type, label: item.label, path: item.path })),
@@ -95,6 +107,55 @@ if (command === "ingest") {
   const report = runBenchmark(graph, suite);
   await writeBenchmarkReport(report, resolve(reportPath));
   console.log(JSON.stringify({ report: resolve(reportPath), metrics: report.metrics }));
+} else if (command === "benchmark-hybrid") {
+  const casesPath = args[0];
+  const reportPath = args[1];
+  if (!casesPath || !reportPath) throw new Error("Benchmark cases and report paths required");
+  const graph = await KnowledgeGraph.load(graphPath);
+  const index = await loadEmbeddingIndex(embeddingsPath);
+  if (!index) throw new Error("No semantic embedding index; run embedding-refresh first");
+  const embedder = new OllamaEmbedder(index.model);
+  const suite = await loadBenchmarkSuite(resolve(casesPath));
+  const report = await runBenchmarkWithSearch(
+    graph,
+    suite,
+    (query, limit) => hybridSearchKnowledge(graph, query, limit, index, embedder),
+  );
+  await writeBenchmarkReport(report, resolve(reportPath));
+  console.log(JSON.stringify({ report: resolve(reportPath), model: index.model, metrics: report.metrics }));
+} else if (command === "semantic-refresh") {
+  const graph = await loadFresh();
+  const maxSources = args[0] ? Number.parseInt(args[0], 10) : undefined;
+  if (maxSources !== undefined && (!Number.isFinite(maxSources) || maxSources < 1)) throw new Error("max-sources must be a positive integer");
+  const semantic = await refreshSemanticKnowledge(graph, new OllamaSemanticExtractor(), { maxSources });
+  await save(graph);
+  output(graph, { semantic });
+} else if (command === "embedding-refresh") {
+  const graph = await KnowledgeGraph.load(graphPath);
+  const embedder = new OllamaEmbedder();
+  const embeddings = await buildEmbeddingIndex(graph, embeddingsPath, embedder);
+  output(graph, { embeddingsPath, embeddingModel: embedder.model, embeddings });
+} else if (command === "managed-repos-refresh") {
+  const force = args.includes("--force");
+  const repositories = await refreshManagedRepositories({
+    graphPath,
+    repositoriesRoot: repositoriesPath,
+    statePath: managedRepositoriesStatePath,
+    force,
+  });
+  let embeddings = null;
+  let embeddingError: string | null = null;
+  if (repositories.updated > 0) {
+    try {
+      const graph = await KnowledgeGraph.load(graphPath);
+      embeddings = await buildEmbeddingIndex(graph, embeddingsPath, new OllamaEmbedder());
+    } catch (error) {
+      embeddingError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  console.log(JSON.stringify({ repositories, embeddings, embeddingError }));
+} else if (command === "managed-repos-status") {
+  console.log(JSON.stringify(await loadManagedRepositoryState(managedRepositoriesStatePath)));
 } else if (command === "ingest-file") {
   const source = args[0];
   if (!source) throw new Error("File or directory path required");
@@ -105,7 +166,7 @@ if (command === "ingest") {
   await save(graph);
   output(graph, { source: resolve(source), imported });
 } else {
-  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url> | benchmark <cases.json> <report.json>");
+  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url> | managed-repos-refresh [--force] | managed-repos-status | semantic-refresh [max-sources] | embedding-refresh | benchmark <cases.json> <report.json> | benchmark-hybrid <cases.json> <report.json>");
 }
 
 async function loadFresh(): Promise<KnowledgeGraph> {

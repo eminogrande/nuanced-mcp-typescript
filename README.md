@@ -100,10 +100,26 @@ Direct app/CLI commands:
 ```bash
 npm run build
 node dist/brain-cli.js import-repo https://github.com/owner/repository
+node dist/brain-cli.js managed-repos-refresh --force
+node dist/brain-cli.js managed-repos-status
+node dist/brain-cli.js semantic-refresh
+node dist/brain-cli.js embedding-refresh
 node dist/brain-cli.js search "minimum font size 16"
 node dist/brain-cli.js stats
 npm run benchmark -- /absolute/path/to/cases.json /absolute/path/to/report.json
+node dist/brain-cli.js benchmark-hybrid /absolute/path/to/cases.json /absolute/path/to/report.json
 ```
+
+Semantic extraction and multilingual retrieval run locally through Ollama:
+
+```bash
+ollama pull qwen3:4b
+ollama pull qwen3-embedding:0.6b
+```
+
+Normal ingestion and lexical search remain available when Ollama is stopped. Derived semantic nodes are accepted only when their evidence is an exact source substring. The embedding index stores quantized vectors, not copied source text.
+
+`managed-repos-refresh` manages the ten most active non-archived, non-fork `nuri-com` repositories measured over the preceding 90 days on 2026-08-14. It records visibility, default branch, and indexed commit; skips unchanged repositories; removes stale file/function nodes after deletes or renames; and isolates failures per repository. Without `--force`, it checks at most once per 24 hours. `--force` checks immediately but still skips unchanged commits.
 
 The default graph is `~/Library/Application Support/DictateMac/Brain/knowledge-graph.json`. Archive refresh replaces stale recording/transcript nodes while preserving repository knowledge.
 

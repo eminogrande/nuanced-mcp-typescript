@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { Graph } from "../graph/analyzer.js";
 
@@ -15,6 +15,12 @@ export type KnowledgeNodeType =
   | "memory"
   | "session"
   | "turn"
+  | "entity"
+  | "claim"
+  | "decision"
+  | "preference"
+  | "task"
+  | "event"
   | "keyword";
 export type KnowledgeEdgeType =
   | "CONTAINS"
@@ -24,6 +30,9 @@ export type KnowledgeEdgeType =
   | "NEXT"
   | "TAGGED"
   | "MENTIONS"
+  | "DERIVED_FROM"
+  | "CONTRADICTS"
+  | "SUPERSEDES"
   | "RELATED";
 
 export interface KnowledgeNode {
@@ -40,6 +49,7 @@ export interface KnowledgeEdge {
   to: string;
   type: KnowledgeEdgeType;
   weight: number;
+  metadata?: Record<string, unknown>;
 }
 
 interface StoredGraph {
@@ -83,24 +93,14 @@ export class KnowledgeGraph {
 
   connectRelated(): void {
     this.edges = this.edges.filter((edge) => edge.type !== "RELATED");
-    const documents = [...this.nodes.values()].filter((node) => !["keyword", "project", "file", "session"].includes(node.type));
-    const terms = new Map(documents.map((node) => [node.id, new Set(tokenize(`${node.label} ${node.text}`))]));
-    for (let leftIndex = 0; leftIndex < documents.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < documents.length; rightIndex += 1) {
-        const left = terms.get(documents[leftIndex].id)!;
-        const right = terms.get(documents[rightIndex].id)!;
-        const overlap = [...left].filter((term) => right.has(term)).length;
-        if (overlap === 0) continue;
-        this.addEdge({ from: documents[leftIndex].id, to: documents[rightIndex].id, type: "RELATED", weight: overlap });
-        this.addEdge({ from: documents[rightIndex].id, to: documents[leftIndex].id, type: "RELATED", weight: overlap });
-      }
-    }
   }
 
   async save(path: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     const data: StoredGraph = { version: 1, nodes: [...this.nodes.values()], edges: this.edges };
-    await writeFile(path, JSON.stringify(data, null, 2) + "\n");
+    const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporaryPath, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
+    await rename(temporaryPath, path);
   }
 
   static async load(path: string): Promise<KnowledgeGraph> {
@@ -201,6 +201,20 @@ export async function ingestRepositoryFiles(graph: KnowledgeGraph, repoPath: str
     count += 1;
   }
   return count;
+}
+
+export function removeRepositoryKnowledge(graph: KnowledgeGraph, repoPath: string): number {
+  const repo = resolve(repoPath);
+  const direct = new Set([...graph.nodes.values()]
+    .filter((node) => node.path === repo || node.metadata.project === repo)
+    .map((node) => node.id));
+  const derived = [...graph.nodes.values()]
+    .filter((node) => typeof node.metadata.sourceID === "string" && direct.has(node.metadata.sourceID))
+    .map((node) => node.id);
+  const stale = new Set([...direct, ...derived]);
+  removeNodes(graph, stale);
+  removeOrphanKeywords(graph);
+  return stale.size;
 }
 
 export async function ingestPromptDirectory(graph: KnowledgeGraph, promptPath: string): Promise<number> {
@@ -467,11 +481,12 @@ function messageText(content: unknown): string {
 }
 
 function relatedNodes(graph: KnowledgeGraph, id: string): KnowledgeNode[] {
+  const relationships = new Set(["CALLS", "HAS_TRANSCRIPT", "HAS_TURN", "NEXT", "CONTAINS", "DERIVED_FROM", "MENTIONS", "CONTRADICTS", "SUPERSEDES"]);
   const ids = graph.edges
-    .filter((edge) => edge.from === id && ["RELATED", "CALLS", "HAS_TRANSCRIPT", "HAS_TURN", "NEXT", "CONTAINS"].includes(edge.type))
+    .filter((edge) => relationships.has(edge.type) && (edge.from === id || edge.to === id))
     .sort((left, right) => right.weight - left.weight)
     .slice(0, 5)
-    .map((edge) => edge.to);
+    .map((edge) => edge.from === id ? edge.to : edge.from);
   return ids.map((relatedID) => graph.nodes.get(relatedID)).filter((item): item is KnowledgeNode => Boolean(item));
 }
 
@@ -490,8 +505,15 @@ function tokenize(value: string): string[] {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .split(/[^a-z0-9]+/)
-    .map(normalize)
+    .flatMap(tokenVariants)
     .filter((part) => (/^\d+$/.test(part) || part.length >= 3) && !STOP.has(part));
+}
+
+function tokenVariants(value: string): string[] {
+  const token = normalize(value);
+  return token.length > 4 && token.endsWith("s") && !/(ss|us|is)$/.test(token)
+    ? [token, token.slice(0, -1)]
+    : [token];
 }
 
 function normalize(value: string): string {

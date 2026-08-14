@@ -1,8 +1,8 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
-import { KnowledgeGraph, searchKnowledge } from "./knowledge/graph.js";
+import { KnowledgeGraph, searchKnowledge, type SearchResult } from "./knowledge/graph.js";
 
 const CaseSchema = z.object({
   id: z.string().min(1),
@@ -100,11 +100,51 @@ export function runBenchmark(graph: KnowledgeGraph, suite: BenchmarkSuite): Benc
   };
 }
 
+export async function runBenchmarkWithSearch(
+  graph: KnowledgeGraph,
+  suite: BenchmarkSuite,
+  search: (query: string, limit: number) => Promise<SearchResult[]>,
+): Promise<BenchmarkReport> {
+  const cases: BenchmarkCaseReport[] = [];
+  for (const item of suite.cases) {
+    const start = performance.now();
+    const results = await search(item.question, 5);
+    cases.push(evaluateCase(item, results, performance.now() - start));
+  }
+  const metrics = summarize(cases);
+  const tags = [...new Set(cases.flatMap((item) => item.tags))].sort();
+  const byTag = Object.fromEntries(tags.map((tag) => {
+    const matching = cases.filter((item) => item.tags.includes(tag));
+    const summary = summarize(matching);
+    return [tag, {
+      cases: matching.length,
+      recallAt5: summary.recallAt5,
+      meanReciprocalRank: summary.meanReciprocalRank,
+      factCoverage: summary.factCoverage,
+    }];
+  }));
+  return {
+    version: 1,
+    suite: suite.name,
+    graph: { nodes: graph.nodes.size, edges: graph.edges.length },
+    generatedAt: new Date().toISOString(),
+    metrics,
+    byTag,
+    cases,
+  };
+}
+
 export async function writeBenchmarkReport(report: BenchmarkReport, jsonPath: string): Promise<void> {
   await mkdir(dirname(jsonPath), { recursive: true });
-  await writeFile(jsonPath, JSON.stringify(report, null, 2) + "\n");
   const markdownPath = jsonPath.replace(/\.json$/i, "") + ".md";
-  await writeFile(markdownPath, benchmarkMarkdown(report));
+  await privateAtomicWrite(jsonPath, JSON.stringify(report, null, 2) + "\n");
+  await privateAtomicWrite(markdownPath, benchmarkMarkdown(report));
+}
+
+async function privateAtomicWrite(path: string, content: string): Promise<void> {
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporaryPath, content, { mode: 0o600 });
+  await rename(temporaryPath, path);
 }
 
 export function benchmarkMarkdown(report: BenchmarkReport): string {
@@ -140,15 +180,27 @@ export function benchmarkMarkdown(report: BenchmarkReport): string {
 function runCase(graph: KnowledgeGraph, item: BenchmarkCase): BenchmarkCaseReport {
   const start = performance.now();
   const results = searchKnowledge(graph, item.question, 5);
-  const latencyMs = performance.now() - start;
+  return evaluateCase(item, results, performance.now() - start);
+}
+
+function evaluateCase(item: BenchmarkCase, results: SearchResult[], latencyMs: number): BenchmarkCaseReport {
   const gold = new Set([
     ...item.goldSourceIDs.map((value) => `id:${value}`),
     ...item.goldSourcePaths.map((value) => `path:${normalizePath(value)}`),
   ]);
-  const isGold = (node: { id: string; path: string | null }) => gold.has(`id:${node.id}`) || Boolean(node.path && gold.has(`path:${normalizePath(node.path)}`));
-  const foundAt1 = results.slice(0, 1).filter(({ node }) => isGold(node)).length;
-  const foundAt5 = new Set(results.filter(({ node }) => isGold(node)).map(({ node }) => node.id)).size;
-  const firstGold = results.findIndex(({ node }) => isGold(node));
+  const matchingGold = (node: { id: string; path: string | null; metadata: Record<string, unknown> }): string[] => {
+    const sourceID = typeof node.metadata.sourceID === "string" ? node.metadata.sourceID : null;
+    const sourcePath = typeof node.metadata.sourcePath === "string" ? node.metadata.sourcePath : null;
+    return [
+      `id:${node.id}`,
+      sourceID ? `id:${sourceID}` : null,
+      node.path ? `path:${normalizePath(node.path)}` : null,
+      sourcePath ? `path:${normalizePath(sourcePath)}` : null,
+    ].filter((key): key is string => Boolean(key && gold.has(key)));
+  };
+  const foundAt1 = new Set(results.slice(0, 1).flatMap(({ node }) => matchingGold(node))).size;
+  const foundAt5 = new Set(results.flatMap(({ node }) => matchingGold(node))).size;
+  const firstGold = results.findIndex(({ node }) => matchingGold(node).length > 0);
   const combined = normalize(results.map(({ node }) => `${node.label}\n${node.text}`).join("\n"));
   const factHits = item.expectedFacts.filter((fact) => combined.includes(normalize(fact))).length;
   const forbiddenHits = item.forbiddenClaims.filter((claim) => combined.includes(normalize(claim))).length;
