@@ -17,6 +17,7 @@ import {
 } from "./knowledge/graph.js";
 import { initPythonGraph } from "./graph/pythonBackend.js";
 import { initTsGraph } from "./graph/tsBackend.js";
+import { loadBenchmarkSuite, runBenchmark, writeBenchmarkReport } from "./benchmark.js";
 
 const support = join(homedir(), "Library", "Application Support", "DictateMac");
 const graphPath = process.env.NUANCED_KNOWLEDGE_GRAPH ?? join(support, "Brain", "knowledge-graph.json");
@@ -85,6 +86,15 @@ if (command === "ingest") {
   }
   await save(graph);
   output(graph, { repository: repo, language, files, functions });
+} else if (command === "benchmark") {
+  const casesPath = args[0];
+  const reportPath = args[1];
+  if (!casesPath || !reportPath) throw new Error("Benchmark cases and report paths required");
+  const graph = await KnowledgeGraph.load(graphPath);
+  const suite = await loadBenchmarkSuite(resolve(casesPath));
+  const report = runBenchmark(graph, suite);
+  await writeBenchmarkReport(report, resolve(reportPath));
+  console.log(JSON.stringify({ report: resolve(reportPath), metrics: report.metrics }));
 } else if (command === "ingest-file") {
   const source = args[0];
   if (!source) throw new Error("File or directory path required");
@@ -95,7 +105,7 @@ if (command === "ingest") {
   await save(graph);
   output(graph, { source: resolve(source), imported });
 } else {
-  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url>");
+  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url> | benchmark <cases.json> <report.json>");
 }
 
 async function loadFresh(): Promise<KnowledgeGraph> {

@@ -102,6 +102,11 @@ npm run build
 node dist/brain-cli.js import-repo https://github.com/owner/repository
 node dist/brain-cli.js search "minimum font size 16"
 node dist/brain-cli.js stats
+npm run benchmark -- /absolute/path/to/cases.json /absolute/path/to/report.json
 ```
 
 The default graph is `~/Library/Application Support/DictateMac/Brain/knowledge-graph.json`. Archive refresh replaces stale recording/transcript nodes while preserving repository knowledge.
+
+Benchmark design, privacy boundaries, metrics, and gates are documented in [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md). The first aggregate baseline is in [`docs/benchmarks/2026-08-14-baseline.md`](docs/benchmarks/2026-08-14-baseline.md). Private benchmark cases and detailed reports remain outside git.
+
+Release history and rationale: [`CHANGELOG.md`](CHANGELOG.md).
