@@ -386,8 +386,6 @@ server.registerTool(
   async ({ query, limit, types }) => {
     const graph = await KnowledgeGraph.load(knowledgeGraphPath);
     await ingestDictatorArchive(graph, dictatorArchivePath);
-    graph.connectRelated();
-    await graph.save(knowledgeGraphPath);
     const results = (await hybridSearchKnowledge(
       graph,
       query,

@@ -111,6 +111,7 @@ test("multilingual embedding fusion retrieves evidence with no shared query toke
   const graph = new KnowledgeGraph();
   graph.upsertNode({ id: "file:design", type: "file", label: "Design rules", text: "The typography constraint is sixteen pixels minimum.", path: "/Design.swift", metadata: {} });
   graph.upsertNode({ id: "file:other", type: "file", label: "Network rules", text: "The server retries failed requests.", path: "/Network.swift", metadata: {} });
+  graph.upsertNode({ id: "function:design", type: "function", label: "minimumFontSize", text: "minimumFontSize returns 16", path: "/Design.swift", metadata: { project: "/repo" } });
   const root = await mkdtemp(join(tmpdir(), "nuanced-embeddings-"));
   const path = join(root, "index.json");
   const embedder = new SemanticTestEmbedder();

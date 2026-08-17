@@ -72,7 +72,7 @@ export async function buildEmbeddingIndex(
   const pending: Array<{ id: string; nodeID: string; chunkIndex: number; textHash: string; text: string }> = [];
   const entries: EmbeddingEntry[] = [];
   let reused = 0;
-  const nodes = [...graph.nodes.values()].filter((node) => !["keyword", "recording", "project", "session"].includes(node.type));
+  const nodes = [...graph.nodes.values()].filter((node) => !["keyword", "recording", "project", "session", "function"].includes(node.type));
   for (const node of nodes) {
     for (const [chunkIndex, text] of chunks(`${node.label}\n${node.text}`, 1_800, 200, options.maxChunksPerNode ?? 120).entries()) {
       const textHash = stable(text);

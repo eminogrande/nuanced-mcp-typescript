@@ -39,7 +39,6 @@ if (command === "ingest") {
   output(graph, { prompts });
 } else if (command === "search") {
   const graph = await loadFresh();
-  await save(graph);
   const query = args.join(" ");
   const results = (await hybridSearchKnowledge(
     graph,
@@ -55,11 +54,9 @@ if (command === "ingest") {
   console.log(JSON.stringify({ query, results }));
 } else if (command === "stats") {
   const graph = await loadFresh();
-  await save(graph);
   output(graph, {});
 } else if (command === "browse") {
   const graph = await loadFresh();
-  await save(graph);
   const rawType = args[0] ?? "all";
   const allowed = new Set(["project", "file", "function", "recording", "transcript", "prompt", "document", "memory", "session", "turn"]);
   if (rawType !== "all" && !allowed.has(rawType)) throw new Error(`Unknown source type: ${rawType}`);
@@ -143,17 +140,19 @@ if (command === "ingest") {
     statePath: managedRepositoriesStatePath,
     force,
   });
-  let embeddings = null;
-  let embeddingError: string | null = null;
-  if (repositories.updated > 0) {
-    try {
-      const graph = await KnowledgeGraph.load(graphPath);
-      embeddings = await buildEmbeddingIndex(graph, embeddingsPath, new OllamaEmbedder());
-    } catch (error) {
-      embeddingError = error instanceof Error ? error.message : String(error);
-    }
+  console.log(JSON.stringify({ repositories, embeddings: null, embeddingError: null }));
+} else if (command === "hermes-sync") {
+  const graph = await loadFresh();
+  const imported = { documents: 0, memories: 0, sessions: 0, turns: 0 };
+  const memoryRoot = join(homedir(), ".hermes", "memories");
+  for (const name of ["MEMORY.md", "USER.md"]) {
+    const source = join(memoryRoot, name);
+    if (existsSync(source)) mergeImport(imported, await ingestKnowledgePath(graph, source));
   }
-  console.log(JSON.stringify({ repositories, embeddings, embeddingError }));
+  const sessions = join(brainDirectory, "AgentSessions");
+  if (existsSync(sessions)) mergeImport(imported, await ingestKnowledgePath(graph, sessions));
+  await save(graph);
+  output(graph, { imported });
 } else if (command === "managed-repos-status") {
   console.log(JSON.stringify(await loadManagedRepositoryState(managedRepositoriesStatePath)));
 } else if (command === "ingest-file") {
@@ -166,7 +165,7 @@ if (command === "ingest") {
   await save(graph);
   output(graph, { source: resolve(source), imported });
 } else {
-  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url> | managed-repos-refresh [--force] | managed-repos-status | semantic-refresh [max-sources] | embedding-refresh | benchmark <cases.json> <report.json> | benchmark-hybrid <cases.json> <report.json>");
+  throw new Error("Usage: brain-cli ingest [prompt-dir ...] | ingest-file <path> [kind] [label] | search <query> | browse <type|all> [limit] | stats | visualize <query> | import-repo <github-url> | hermes-sync | managed-repos-refresh [--force] | managed-repos-status | semantic-refresh [max-sources] | embedding-refresh | benchmark <cases.json> <report.json> | benchmark-hybrid <cases.json> <report.json>");
 }
 
 async function loadFresh(): Promise<KnowledgeGraph> {
@@ -178,6 +177,13 @@ async function loadFresh(): Promise<KnowledgeGraph> {
 async function save(graph: KnowledgeGraph): Promise<void> {
   graph.connectRelated();
   await graph.save(graphPath);
+}
+
+function mergeImport(target: { documents: number; memories: number; sessions: number; turns: number }, extra: { documents: number; memories: number; sessions: number; turns: number }): void {
+  target.documents += extra.documents;
+  target.memories += extra.memories;
+  target.sessions += extra.sessions;
+  target.turns += extra.turns;
 }
 
 function output(graph: KnowledgeGraph, extra: Record<string, unknown>): void {
