@@ -28,6 +28,7 @@ import {
   type KnowledgeNodeType,
 } from "./knowledge/graph.js";
 import { hybridSearchKnowledge, loadEmbeddingIndex, OllamaEmbedder } from "./knowledge/embeddings.js";
+import { BrainIndexDb, defaultIndexPath } from "./knowledge/indexDb.js";
 
 const registry = new RepoRegistry();
 const knowledgeGraphPath = process.env.NUANCED_KNOWLEDGE_GRAPH ?? join(homedir(), ".nuanced", "knowledge-graph.json");
@@ -384,21 +385,15 @@ server.registerTool(
     },
   },
   async ({ query, limit, types }) => {
-    const graph = await KnowledgeGraph.load(knowledgeGraphPath);
-    await ingestDictatorArchive(graph, dictatorArchivePath);
-    const results = (await hybridSearchKnowledge(
-      graph,
-      query,
-      limit,
-      await loadEmbeddingIndex(embeddingIndexPath),
-      new OllamaEmbedder(),
-      types as KnowledgeNodeType[] | undefined,
-    )).map((result) => ({
-      id: result.node.id, type: result.node.type, label: result.node.label, path: result.node.path,
-      score: result.score, excerpt: excerptFor(result.node.text, query, 500),
-      related: result.related.map((node) => ({ id: node.id, type: node.type, label: node.label, path: node.path })),
-    }));
-    return text(JSON.stringify({ query, results }, null, 2));
+    const indexPath = process.env.NUANCED_INDEX_DB ?? defaultIndexPath(knowledgeGraphPath);
+    const index = new BrainIndexDb(indexPath);
+    try {
+      index.rebuildIfStale(knowledgeGraphPath);
+      const results = index.search(query, limit, types as string[] | undefined);
+      return text(JSON.stringify({ query, results }, null, 2));
+    } finally {
+      index.close();
+    }
   },
 );
 

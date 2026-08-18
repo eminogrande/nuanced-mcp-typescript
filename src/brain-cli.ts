@@ -19,6 +19,7 @@ import { initPythonGraph } from "./graph/pythonBackend.js";
 import { initTsGraph } from "./graph/tsBackend.js";
 import { loadBenchmarkSuite, runBenchmark, runBenchmarkWithSearch, writeBenchmarkReport } from "./benchmark.js";
 import { buildEmbeddingIndex, hybridSearchKnowledge, loadEmbeddingIndex, OllamaEmbedder } from "./knowledge/embeddings.js";
+import { BrainIndexDb, defaultIndexPath } from "./knowledge/indexDb.js";
 import { OllamaSemanticExtractor, refreshSemanticKnowledge } from "./knowledge/semantic.js";
 import { loadManagedRepositoryState, refreshManagedRepositories } from "./knowledge/managedRepositories.js";
 
@@ -38,6 +39,16 @@ if (command === "ingest") {
   await save(graph);
   output(graph, { prompts });
 } else if (command === "search") {
+  const query = args.join(" ");
+  const index = new BrainIndexDb(defaultIndexPath(graphPath));
+  try {
+    index.rebuildIfStale(graphPath);
+    const results = index.search(query, 24);
+    console.log(JSON.stringify({ query, results }));
+  } finally {
+    index.close();
+  }
+} else if (command === "search-slow") {
   const graph = await loadFresh();
   const query = args.join(" ");
   const results = (await hybridSearchKnowledge(
