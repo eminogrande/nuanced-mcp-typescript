@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -40,6 +40,7 @@ if (command === "ingest") {
   output(graph, { prompts });
 } else if (command === "search") {
   const query = args.join(" ");
+  await refreshGraphFromArchiveIfNewer();
   const index = new BrainIndexDb(defaultIndexPath(graphPath));
   try {
     index.rebuildIfStale(graphPath);
@@ -183,6 +184,14 @@ async function loadFresh(): Promise<KnowledgeGraph> {
   const graph = await KnowledgeGraph.load(graphPath);
   await ingestDictatorArchive(graph, archivePath);
   return graph;
+}
+
+async function refreshGraphFromArchiveIfNewer(): Promise<void> {
+  const graphStat = await stat(graphPath).catch(() => undefined);
+  const archiveStat = await stat(archivePath).catch(() => undefined);
+  if (!archiveStat || (graphStat && archiveStat.mtimeMs <= graphStat.mtimeMs)) return;
+  const graph = await loadFresh();
+  await save(graph);
 }
 
 async function save(graph: KnowledgeGraph): Promise<void> {

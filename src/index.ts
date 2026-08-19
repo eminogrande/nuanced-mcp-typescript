@@ -7,6 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { stat as statFile } from "node:fs/promises";
 import { resolve, isAbsolute, join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { RepoRegistry, type Language } from "./graph/registry.js";
@@ -385,6 +386,20 @@ server.registerTool(
     },
   },
   async ({ query, limit, types }) => {
+    // Auto-learn: pull new dictations into the graph before searching, so a fresh
+    // recording is findable seconds after Fn release without any manual sync.
+    try {
+      const graphStat = await statFile(knowledgeGraphPath).catch(() => undefined);
+      const archiveStat = await statFile(dictatorArchivePath).catch(() => undefined);
+      if (archiveStat && (!graphStat || archiveStat.mtimeMs > graphStat.mtimeMs)) {
+        const graph = await KnowledgeGraph.load(knowledgeGraphPath);
+        await ingestDictatorArchive(graph, dictatorArchivePath);
+        graph.connectRelated();
+        await graph.save(knowledgeGraphPath);
+      }
+    } catch {
+      // Ingestion failure must never block the search itself.
+    }
     const indexPath = process.env.NUANCED_INDEX_DB ?? defaultIndexPath(knowledgeGraphPath);
     const index = new BrainIndexDb(indexPath);
     try {
